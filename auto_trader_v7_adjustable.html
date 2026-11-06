@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Auto Trader — Paper Trading V2</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(135deg,#eef7f4 0%,#f6f8fb 48%,#edf2fa 100%);color:#17201d;min-height:100vh}
+header{background:linear-gradient(135deg,#0b3d35,#12624f 55%,#173e6b);color:#fff;padding:22px 18px;box-shadow:0 6px 24px #12382a33}
+main{max-width:950px;margin:auto;padding:18px 16px}
+.card{background:rgba(255,255,255,.94);border-radius:16px;padding:18px;margin:12px 0;box-shadow:0 8px 30px #15352a12;border:1px solid #ffffff}
+header h1{letter-spacing:.2px;margin:0 0 4px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.metric{font-size:24px;font-weight:700}.muted{color:#666;font-size:13px}
+button{border:0;border-radius:10px;padding:11px 15px;font-weight:700;cursor:pointer}
+.primary{background:#111;color:#fff}.secondary{background:#e9eaed}
+input{width:100%;padding:10px;border:1px solid #ccc;border-radius:9px;margin-top:6px}
+.trade,.history-row{border:1px solid #ddd;border-radius:10px;padding:12px;margin-top:10px}
+.history-row{cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.history-row:hover{background:#f6f7f8}
+.good{color:#087f23}.bad{color:#b00020}
+.tag{font-size:11px;padding:4px 7px;border-radius:7px;background:#eee}
+.modal{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;padding:15px}
+.modal.open{display:flex}
+.modal-box{background:#fff;border-radius:16px;width:min(900px,100%);max-height:92vh;overflow:auto;padding:18px}
+.chart-wrap{background:#0c2a42;border-radius:12px;padding:8px;margin:12px 0}
+canvas{display:block;width:100%;height:300px}
+.detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.detail{background:#f5f5f5;border-radius:10px;padding:10px}
+@media(max-width:600px){.detail-grid{grid-template-columns:repeat(2,1fr)}}
+
+.top-nav{position:absolute;right:16px;top:14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.top-nav button{background:#2a2a2a;color:#fff;padding:8px 10px;font-size:12px}
+.top-nav button:hover{background:#3a3a3a}
+.panel-overlay{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;padding:15px;z-index:30}
+.panel-overlay.open{display:flex}
+.panel-box{background:#fff;border-radius:16px;width:min(620px,100%);max-height:90vh;overflow:auto;padding:20px}
+header{position:relative;padding-right:20px}
+@media(max-width:700px){.top-nav{position:static;margin-top:12px;justify-content:flex-start}header{padding-right:18px}}
+
+.screen{position:fixed;inset:0;background:linear-gradient(135deg,#eef7f4,#f7f9fc);z-index:40;display:none;overflow:auto}
+.screen.open{display:block}
+.screen-inner{max-width:900px;margin:auto;padding:24px 18px 50px}
+.screen-header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}
+.screen-kicker{font-size:11px;font-weight:800;letter-spacing:2px;color:#397d6a}
+.screen-header h2{margin:3px 0;font-size:30px}
+.screen .card{box-shadow:0 10px 35px #15352a12}
+.close-screen{white-space:nowrap}
+
+.market-card{border:1px solid #d7eee6;background:linear-gradient(135deg,#f8fffc,#f5f8fc)}
+.market-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.market-badge{font-size:12px;font-weight:800;letter-spacing:.8px;padding:7px 10px;border-radius:999px}
+.market-badge.open{background:#d9f5e7;color:#087f4f}
+.market-badge.closed{background:#eceff2;color:#58616b}
+.market-countdown{text-align:center;padding:14px 8px 10px}
+.market-main-label{font-size:13px;color:#66716e;font-weight:700}
+.market-main-time{font-size:34px;font-weight:800;letter-spacing:1px;margin-top:3px}
+.market-details{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.market-details>div{background:#fff;border:1px solid #e6ece9;border-radius:10px;padding:10px}
+.market-details b{display:block;margin-top:3px}
+.market-message{margin-top:10px;padding:10px 12px;border-radius:10px;background:#eef6f3;font-size:13px}
+@media(max-width:600px){.market-details{grid-template-columns:repeat(2,1fr)}.market-main-time{font-size:30px}}
+
+
+.engine-ok{color:#087f4f}.engine-warn{color:#9a6700}.engine-bad{color:#b00020}
+.backend-note{font-size:12px;color:#66716e;margin-top:8px}
+.trade-status{display:inline-block;font-size:11px;padding:4px 7px;border-radius:7px;background:#eef3f1;margin-top:5px}
+
+</style>
+</head>
+<body>
+<header>
+<div style="display:flex;align-items:center;gap:12px">
+<div style="width:46px;height:46px;border-radius:14px;background:linear-gradient(145deg,#8ee6c4,#4fb894);display:flex;align-items:center;justify-content:center;box-shadow:0 5px 18px #0003">
+<svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-label="Auto Trader logo">
+<path d="M5 19L11 13L15 16L23 7" stroke="#07372d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M18 7H23V12" stroke="#07372d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>
+<div><h1>Auto Trader</h1><div style="opacity:.8">Paper trading • calm, rule-based automation</div></div>
+</div>
+<nav class="top-nav">
+<button onclick="openScreen('balance')">💰 Balance</button>
+<button onclick="openScreen('reload')">➕ Reload</button>
+<button onclick="openScreen('broker')">🔐 Broker</button>
+<button onclick="openScreen('settings')">⚙️ Settings</button>
+</nav>
+</header>
+<main>
+<div class="card">
+<h2>Account</h2>
+<div class="grid">
+<div><div class="muted">Money available</div><div id="cash" class="metric">$100.00</div></div>
+<div><div class="muted">Currently invested</div><div id="invested" class="metric">$0.00</div></div>
+<div><div class="muted">Profit / Loss</div><div id="pnl" class="metric">$0.00</div></div>
+<div><div class="muted">Goal</div><div id="goal" class="metric">$1,000.00</div></div>
+</div>
+</div>
+
+
+<div class="card market-card">
+  <div class="market-top">
+    <div>
+      <div class="screen-kicker">MARKET HOURS</div>
+      <h2 style="margin:3px 0 2px">🕒 Market Clock</h2>
+      <div class="muted">U.S. stock market • Pacific Time</div>
+    </div>
+    <div id="marketBadge" class="market-badge closed">CLOSED</div>
+  </div>
+  <div class="market-countdown">
+    <div class="market-main-label" id="marketAction">Market opens in</div>
+    <div class="market-main-time" id="marketCountdown">--:--:--</div>
+  </div>
+  <div class="market-details">
+    <div><span class="muted">Current time</span><b id="marketNow">--:-- --</b></div>
+    <div><span class="muted">Opens</span><b>6:30 AM PT</b></div>
+    <div><span class="muted">Closes</span><b>1:00 PM PT</b></div>
+    <div><span class="muted">Next market day</span><b id="marketDay">--</b></div>
+  </div>
+  <div id="marketMessage" class="market-message">Auto Trader will begin scanning automatically when the market opens.</div>
+</div>
+
+<div class="card">
+<h2>⚙️ Quick Settings</h2>
+<p class="muted">The live engine controls the paper account. Use the top-right Settings screen to change risk rules.</p>
+<div class="detail-grid">
+  <div class="detail"><span class="muted">Engine bankroll</span><br><b id="quickBankroll">$100.00</b></div>
+  <div class="detail"><span class="muted">Goal</span><br><b id="quickGoal">$1,000.00</b></div>
+</div>
+</div>
+
+<div class="card">
+<h2>🤖 Auto Trader</h2>
+<p id="status">Waiting for the next market scan.</p>
+<button class="primary" onclick="manualScan()">🔎 Test Scan Now</button>
+<button class="secondary" onclick="refreshEngine()">↻ Refresh</button>
+</div>
+
+<div class="card">
+<h2>🔌 Engine Connection</h2>
+<div class="detail-grid">
+  <div class="detail"><span class="muted">Engine</span><br><b id="engineState">Connecting…</b></div>
+  <div class="detail"><span class="muted">Paper bankroll</span><br><b id="engineBankroll">$100.00</b></div>
+  <div class="detail"><span class="muted">Broker account</span><br><b id="brokerEquity">$0.00</b></div>
+  <div class="detail"><span class="muted">Last scan</span><br><b id="lastScan">—</b></div>
+</div>
+</div>
+
+<div class="card">
+<h2>📈 Current trades</h2>
+<div id="trades"><div class="muted">No open trades.</div></div>
+</div>
+
+<div class="card">
+<h2>📚 Trade History</h2>
+<p class="muted">Tap any completed trade to see its price chart, entry, exit, profit/loss, and why the app made the trade.</p>
+<div id="history"><div class="muted">No completed trades yet.</div></div>
+</div>
+
+<div class="card">
+<h2>What the app is doing</h2>
+<div id="log" class="muted">Connected to the Auto Trader paper engine. The app reads the real paper-trading engine running on Render; no real money is traded.</div>
+</div>
+</main>
+
+<div id="modal" class="modal" onclick="closeModal(event)">
+<div class="modal-box">
+<div style="display:flex;justify-content:space-between;align-items:center">
+<h2 id="detailTitle">Trade Details</h2>
+<button class="secondary" onclick="closeDetails()">✕</button>
+</div>
+<div id="detailBody"></div>
+</div>
+</div>
+
+
+
+<div id="screen" class="screen" aria-hidden="true">
+  <div class="screen-inner">
+    <div class="screen-header">
+      <div>
+        <div class="screen-kicker">AUTO TRADER</div>
+        <h2 id="screenTitle">Menu</h2>
+      </div>
+      <button class="secondary close-screen" onclick="closeScreen()">✕ Close</button>
+    </div>
+    <div id="screenBody"></div>
+  </div>
+</div>
+
+<div id="panel" class="panel-overlay" onclick="closePanel(event)">
+  <div class="panel-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <h2 id="panelTitle" style="margin:0">Menu</h2>
+      <button class="secondary" onclick="closePanel()">✕</button>
+    </div>
+    <div id="panelBody" style="margin-top:12px"></div>
+  </div>
+</div>
+<script>
+
+const API_BASE = localStorage.getItem("autoTraderApi") || "https://auto-trader-paper-engine.onrender.com";
+let engineState={cash:100,equity:100,starting_cash:100,paper_bankroll:100,broker_cash:0,broker_equity:0,open_trades:{},history:[],realized:0,daily_loss:0,engine:"connecting",message:"Connecting to paper engine.",risk_per_trade_pct:.5,max_daily_loss_pct:2,max_open_positions:2,min_reward_risk:2,last_scan:null,last_setup:null};
+let goal=Number(localStorage.getItem("autoTraderGoal")||1000);
+let apiTimer=null;
+
+function money(x){return "$"+Number(x||0).toFixed(2)}
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function apiUrl(path){return API_BASE.replace(/\/+$/,"")+path}
+
+async function api(path,options={}){
+  const res=await fetch(apiUrl(path),{
+    ...options,
+    headers:{"Content-Type":"application/json",...(options.headers||{})}
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.detail||data.message||`HTTP ${res.status}`);
+  return data;
+}
+
+function setConnection(text,kind=""){
+  const el=document.getElementById("engineState");
+  if(el){el.textContent=text;el.className=kind?`engine-${kind}`:"";}
+}
+
+function normalizeHistory(h){
+  return (h||[]).map(t=>({
+    ...t,
+    ticker:t.symbol||t.ticker||"—",
+    name:t.name||t.symbol||t.ticker||"—",
+    entry:Number(t.entry_fill||t.entry_plan||t.entry||0),
+    exit:t.exit!=null?Number(t.exit):null,
+    qty:Number(t.qty||0),
+    pnl:Number(t.pnl||0),
+    openedAt:t.opened||t.openedAt||"",
+    closedAt:t.closed||t.closedAt||"",
+    closedReason:t.exit_reason||t.closedReason||""
+  }));
+}
+
+async function refreshEngine(){
+  try{
+    const [status,trades]=await Promise.all([api("/api/status"),api("/api/trades")]);
+    engineState={...engineState,...status,open_trades:trades.open||{},history:normalizeHistory(trades.history||[])};
+    renderEngine();
+    setConnection("Connected","ok");
+  }catch(e){
+    setConnection("Connection error","bad");
+    document.getElementById("status").textContent="Could not reach the paper engine.";
+    document.getElementById("log").textContent=e.message;
+  }
+}
+
+function renderEngine(){
+  const s=engineState;
+  document.getElementById("cash").textContent=money(s.cash);
+  const open=Object.values(s.open_trades||{});
+  const invested=open.reduce((sum,t)=>sum+Number(t.current||t.entry_fill||t.entry_plan||0)*Number(t.qty||0),0);
+  document.getElementById("invested").textContent=money(invested);
+  const pnl=Number(s.equity||0)-Number(s.starting_cash||s.paper_bankroll||100);
+  const pnlEl=document.getElementById("pnl");
+  pnlEl.textContent=money(pnl);
+  pnlEl.className="metric "+(pnl>=0?"good":"bad");
+  document.getElementById("goal").textContent=money(goal);
+  if(document.getElementById("quickBankroll")) document.getElementById("quickBankroll").textContent=money(s.paper_bankroll||100);
+  if(document.getElementById("quickGoal")) document.getElementById("quickGoal").textContent=money(goal);
+
+  const engine=document.getElementById("engineState");
+  if(engine){
+    engine.textContent=String(s.engine||"unknown").replace(/_/g," ");
+    engine.className=(s.engine==="error"?"engine-bad":s.engine==="waiting"||s.engine==="cooldown"?"engine-warn":"engine-ok");
+  }
+  document.getElementById("engineBankroll").textContent=money(s.paper_bankroll||s.starting_cash||100);
+  document.getElementById("brokerEquity").textContent=money(s.broker_equity||0);
+  document.getElementById("lastScan").textContent=s.last_scan?new Date(s.last_scan).toLocaleTimeString():"—";
+  document.getElementById("status").textContent=s.message||"Paper engine connected.";
+  document.getElementById("log").innerHTML=s.last_setup
+    ? `<b>Latest setup:</b> ${esc(s.last_setup.symbol||"")} — ${esc(s.last_setup.reason||"Setup found by the strategy.")}`
+    : `<b>Engine:</b> ${esc(s.message||"Waiting for the next scan.")}`;
+
+  const box=document.getElementById("trades");
+  box.innerHTML=open.length ? open.map((t,i)=>{
+    const entry=Number(t.entry_fill||t.entry_plan||0), current=Number(t.current||entry);
+    const pl=Number(t.unrealized_pnl||((current-entry)*Number(t.qty||0)));
+    return `<div class="trade">
+      <b>${esc(t.symbol)}</b> <span class="trade-status">${esc(t.status||"open")}</span><br>
+      Planned entry ${money(t.entry_plan)} · Fill ${money(entry)} · Now ${money(current)}<br>
+      Shares: ${Number(t.qty||0).toFixed(4)} · P/L:
+      <span class="${pl>=0?'good':'bad'}">${money(pl)}</span><br>
+      Max risk: ${money(t.risk_cash)} · Target: ${money(t.target)} · R/R: ${Number(t.reward_risk||0).toFixed(1)}:1
+      <br><button class="secondary" style="margin-top:8px" onclick="showOpenBySymbol('${esc(t.symbol)}')">View trade</button>
+    </div>`;
+  }).join("") : '<div class="muted">No open trades.</div>';
+
+  const h=document.getElementById("history");
+  h.innerHTML=engineState.history.length ? engineState.history.map((t,idx)=>{
+    const cls=t.pnl>=0?"good":"bad";
+    return `<div class="history-row" onclick="showHistory(${idx})">
+      <div><b>${esc(t.ticker)}</b> — ${esc(t.name)}<br><span class="muted">${esc(t.closedReason||"completed")} · ${esc(t.closedAt||"")}</span></div>
+      <div style="text-align:right"><b class="${cls}">${t.pnl>=0?"+":""}${money(t.pnl)}</b><br><span class="tag">VIEW ▸</span></div>
+    </div>`;
+  }).join("") : '<div class="muted">No completed trades yet.</div>';
+}
+
+async function manualScan(){
+  try{
+    await api("/api/scan",{method:"POST",body:"{}"});
+    document.getElementById("status").textContent="Paper scan requested. The engine will evaluate the market using its rules.";
+    setTimeout(refreshEngine,700);
+  }catch(e){
+    document.getElementById("status").textContent="Scan request failed.";
+    document.getElementById("log").textContent=e.message;
+  }
+}
+
+function showOpenBySymbol(symbol){
+  const t=engineState.open_trades?.[symbol];
+  if(t) openDetails(t,"Current trade");
+}
+
+function showOpen(i){
+  const t=Object.values(engineState.open_trades||{})[i];
+  if(t) openDetails(t,"Current trade");
+}
+function showHistory(i){
+  const t=engineState.history[i];
+  if(t) openDetails(t,"Completed trade");
+}
+function openDetails(t,label){
+  const entry=Number(t.entry_fill||t.entry_plan||t.entry||0);
+  const current=t.exit!=null?Number(t.exit):Number(t.current||entry);
+  const prices=[entry,current];
+  const view={...t,ticker:t.symbol||t.ticker||"—",name:t.name||t.symbol||t.ticker||"—",entry,exit:t.exit!=null?Number(t.exit):null,qty:Number(t.qty||0),pnl:Number(t.pnl||t.unrealized_pnl||0),prices};
+  document.getElementById("detailTitle").textContent=`${view.ticker} — ${view.name}`;
+  document.getElementById("detailBody").innerHTML=`
+  <div class="chart-wrap"><canvas id="tradeChart"></canvas></div>
+  <div class="detail-grid">
+    <div class="detail"><span class="muted">Status</span><br><b>${label}</b></div>
+    <div class="detail"><span class="muted">Bought</span><br><b>${money(view.entry)}</b></div>
+    <div class="detail"><span class="muted">Sold</span><br><b>${view.exit==null?"Not sold":money(view.exit)}</b></div>
+    <div class="detail"><span class="muted">Shares</span><br><b>${view.qty.toFixed(4)}</b></div>
+    <div class="detail"><span class="muted">P/L</span><br><b class="${view.pnl>=0?'good':'bad'}">${label==="Current trade"?"Open":money(view.pnl)}</b></div>
+    <div class="detail"><span class="muted">Opened</span><br><b>${esc(view.opened||view.openedAt||"")}</b></div>
+  </div>
+  <div class="trade"><b>Why did the app make this trade?</b><br>${esc(view.reason||"The setup passed the strategy rules.")}</div>
+  ${view.exit_reason||view.closedReason?`<div class="trade"><b>Why did it sell?</b><br>${esc(view.exit_reason||view.closedReason)}</div>`:""}
+  `;
+  document.getElementById("modal").classList.add("open");
+  requestAnimationFrame(()=>drawChart(document.getElementById("tradeChart"),view));
+}
+function closeDetails(){document.getElementById("modal").classList.remove("open")}
+function closeModal(e){if(e.target.id==="modal")closeDetails()}
+
+function drawChart(canvas,t){
+  let ctx=canvas.getContext("2d"), w=canvas.width=canvas.clientWidth*2, h=canvas.height=600;
+  ctx.clearRect(0,0,w,h);ctx.fillStyle="#0c2a42";ctx.fillRect(0,0,w,h);
+  let prices=t.prices||[t.entry,t.exit??t.current??t.entry], min=Math.min(...prices),max=Math.max(...prices), pad=(max-min)*.12||1;
+  min-=pad;max+=pad;let xStep=prices.length>1?w/(prices.length-1):w;
+  function y(v){return h-30-(v-min)/(max-min)*(h-60)}
+  ctx.strokeStyle="rgba(255,255,255,.10)";ctx.lineWidth=2;
+  for(let i=1;i<7;i++){let yy=i*h/7;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}
+  ctx.strokeStyle="#83d63d";ctx.lineWidth=5;ctx.beginPath();
+  prices.forEach((p,i)=>{let xx=i*xStep,yy=y(p);if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy)});ctx.stroke();
+  ctx.strokeStyle="#fff";ctx.setLineDash([10,8]);ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(0,y(t.entry));ctx.lineTo(w,y(t.entry));ctx.stroke();ctx.setLineDash([]);
+  ctx.font="28px Arial";ctx.fillStyle="#fff";ctx.fillText("Entry",20,Math.max(35,y(t.entry)-10));
+  if(t.exit!=null){ctx.fillStyle="#ffb84d";ctx.fillText("Exit",w-100,Math.max(35,y(t.exit)-10));}
+}
+
+function openScreen(type){
+  const screen=document.getElementById("screen"), title=document.getElementById("screenTitle"), body=document.getElementById("screenBody");
+  if(type==="balance"){
+    const open=Object.values(engineState.open_trades||{});
+    title.textContent="💰 My Balance";
+    body.innerHTML=`<div class="card"><div class="detail-grid">
+      <div class="detail"><span class="muted">Strategy cash</span><br><b>${money(engineState.cash)}</b></div>
+      <div class="detail"><span class="muted">Strategy equity</span><br><b>${money(engineState.equity)}</b></div>
+      <div class="detail"><span class="muted">Paper bankroll</span><br><b>${money(engineState.paper_bankroll||100)}</b></div>
+      <div class="detail"><span class="muted">Broker paper equity</span><br><b>${money(engineState.broker_equity)}</b></div>
+      <div class="detail"><span class="muted">Realized P/L</span><br><b class="${Number(engineState.realized)>=0?'good':'bad'}">${money(engineState.realized)}</b></div>
+      <div class="detail"><span class="muted">Daily loss</span><br><b class="bad">${money(engineState.daily_loss)}</b></div>
+    </div></div>
+    <div class="card"><h3>Account status</h3><p>🤖 Auto Trader is connected to the <b>Alpaca paper engine</b>. Real money is not being traded.</p></div>`;
+  } else if(type==="reload"){
+    title.textContent="➕ Reload / Add Funds";
+    body.innerHTML=`<div class="card"><h3>Paper bankroll</h3>
+      <p>The engine is intentionally capped at <b>${money(engineState.paper_bankroll||100)}</b>. Adding money in the app would not change the secure engine bankroll.</p>
+      <p class="muted">When we build real funding, this screen will use an official broker funding flow instead of storing card details here.</p></div>`;
+  } else if(type==="broker"){
+    title.textContent="🔐 Market / Broker";
+    body.innerHTML=`<div class="card"><h3>Alpaca paper connection</h3>
+      <p>Connection: <b class="${engineState.engine==="error"?'bad':'good'}">${engineState.engine==="error"?"Needs attention":"Connected"}</b></p>
+      <p>Paper equity: <b>${money(engineState.broker_equity)}</b></p>
+      <p class="muted">Broker credentials stay on the Render server. They are never entered into or stored by this phone app.</p></div>
+      <div class="card"><h3>Live trading</h3><p>Live trading remains disabled while we test the strategy.</p></div>`;
+  } else if(type==="settings"){
+    title.textContent="⚙️ Settings";
+    body.innerHTML=`<div class="card"><h3>Strategy bankroll & risk settings</h3>
+      <label>Strategy bankroll ($)<input id="bankroll" type="number" min="1" step="1" value="${engineState.strategy_bankroll ?? engineState.paper_bankroll ?? 100}"></label><br>
+      <p class="muted">This is the amount V7 is allowed to use for new trades. Changing it does not resize existing positions.</p>
+      <label>Risk per trade (%)<input id="riskPct" type="number" min="0.05" max="100" step="0.05" value="${engineState.risk_per_trade_pct}"></label><br>
+      <label>Max daily loss (%)<input id="dailyPct" type="number" min="0.25" max="100" step="0.25" value="${engineState.max_daily_loss_pct}"></label><br>
+      <label>Max open positions<input id="maxPos" type="number" min="1" max="20" step="1" value="${engineState.max_open_positions}"></label><br>
+      <label>Minimum reward/risk<input id="minRR" type="number" min="1" max="20" step="0.1" value="${engineState.min_reward_risk}"></label><br>
+      <button class="primary" onclick="saveSettings()">Save engine settings</button>
+    </div>
+    <div class="card"><h3>Goal</h3>
+      <label>Paper goal<input id="goalScreen" type="number" min="1" value="${goal}"></label><br>
+      <button class="secondary" onclick="saveGoal()">Save goal</button>
+    </div>
+    <div class="card"><h3>Engine URL</h3>
+      <p class="muted">Current backend: ${esc(API_BASE)}</p>
+    </div>`;
+  }
+  screen.classList.add("open");screen.setAttribute("aria-hidden","false");
+}
+function closeScreen(){const s=document.getElementById("screen");s.classList.remove("open");s.setAttribute("aria-hidden","true")}
+async function saveSettings(){
+  const payload={
+    strategy_bankroll:Number(document.getElementById("bankroll").value),
+    risk_per_trade_pct:Number(document.getElementById("riskPct").value),
+    max_daily_loss_pct:Number(document.getElementById("dailyPct").value),
+    max_open_positions:Number(document.getElementById("maxPos").value),
+    min_reward_risk:Number(document.getElementById("minRR").value)
+  };
+  try{await api("/api/settings",{method:"POST",body:JSON.stringify(payload)});await refreshEngine();closeScreen();}
+  catch(e){alert("Could not save engine settings: "+e.message)}
+}
+function saveGoal(){
+  const g=Number(document.getElementById("goalScreen").value);
+  if(g>0){goal=g;localStorage.setItem("autoTraderGoal",String(g));renderEngine();closeScreen();}
+}
+
+refreshEngine();
+apiTimer=setInterval(refreshEngine,3000);
+
+const MARKET_OPEN_MIN = 6 * 60 + 30;
+const MARKET_CLOSE_MIN = 13 * 60;
+
+function ptParts(d=new Date()){
+  const parts = new Intl.DateTimeFormat("en-US",{
+    timeZone:"America/Los_Angeles",
+    year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",second:"2-digit",
+    hour12:false,weekday:"short"
+  }).formatToParts(d);
+  const p={};
+  for(const x of parts) if(x.type!=="literal") p[x.type]=x.value;
+  return {
+    year:+p.year, month:+p.month, day:+p.day,
+    hour:+p.hour===24?0:+p.hour, minute:+p.minute, second:+p.second,
+    weekday:p.weekday
+  };
+}
+
+function ptDateKey(p){
+  return `${p.year}-${String(p.month).padStart(2,"0")}-${String(p.day).padStart(2,"0")}`;
+}
+
+function isWeekend(p){ return p.weekday==="Sat" || p.weekday==="Sun"; }
+
+function nextWeekday(p){
+  const d=new Date(Date.UTC(p.year,p.month-1,p.day));
+  do { d.setUTCDate(d.getUTCDate()+1); }
+  while(d.getUTCDay()===0 || d.getUTCDay()===6);
+  return {
+    year:d.getUTCFullYear(),month:d.getUTCMonth()+1,day:d.getUTCDate(),
+    hour:0,minute:0,second:0,weekday:["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getUTCDay()]
+  };
+}
+
+function addPtDays(p,n){
+  let q={...p};
+  for(let i=0;i<n;i++) q=nextWeekday(q);
+  return q;
+}
+
+function ptTimestamp(p,hour,minute,second=0){
+  // The app is designed around Pacific Time. We calculate the target using
+  // the browser's local date parts, then correct for Pacific offset.
+  const guess=new Date(Date.UTC(p.year,p.month-1,p.day,hour,minute,second));
+  const tzName=new Intl.DateTimeFormat("en-US",{
+    timeZone:"America/Los_Angeles",timeZoneName:"longOffset"
+  }).formatToParts(guess).find(x=>x.type==="timeZoneName")?.value || "GMT-08:00";
+  const m=tzName.match(/GMT([+-])(\d{2}):?(\d{2})/);
+  const offsetMinutes=m ? (m[1]==="-"?-1:1)*(+m[2]*60+(+m[3]||0)) : -480;
+  return new Date(guess.getTime()-offsetMinutes*60000);
+}
+
+function formatCountdown(ms){
+  ms=Math.max(0,Math.floor(ms/1000));
+  const h=Math.floor(ms/3600), m=Math.floor((ms%3600)/60), s=ms%60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+function formatMarketDay(p){
+  return new Intl.DateTimeFormat("en-US",{
+    timeZone:"America/Los_Angeles",weekday:"short",month:"short",day:"numeric"
+  }).format(ptTimestamp(p,12,0));
+}
+
+function updateMarketClock(){
+  const now=new Date(), p=ptParts(now);
+  const minute=p.hour*60+p.minute+p.second/60;
+  const badge=document.getElementById("marketBadge");
+  const action=document.getElementById("marketAction");
+  const countdown=document.getElementById("marketCountdown");
+  const nowEl=document.getElementById("marketNow");
+  const dayEl=document.getElementById("marketDay");
+  const msg=document.getElementById("marketMessage");
+  if(!badge||!action||!countdown) return;
+
+  nowEl.textContent=new Intl.DateTimeFormat("en-US",{
+    timeZone:"America/Los_Angeles",hour:"numeric",minute:"2-digit",second:"2-digit",hour12:true
+  }).format(now);
+
+  if(!isWeekend(p) && minute>=MARKET_OPEN_MIN && minute<MARKET_CLOSE_MIN){
+    const close=ptTimestamp(p,13,0);
+    badge.textContent="OPEN"; badge.className="market-badge open";
+    action.textContent="Market closes in";
+    countdown.textContent=formatCountdown(close-now);
+    dayEl.textContent="Today";
+    msg.textContent="🟢 Market is open. Auto Trader can scan for qualifying setups.";
+  }else{
+    badge.textContent="CLOSED"; badge.className="market-badge closed";
+    let target;
+    if(!isWeekend(p) && minute<MARKET_OPEN_MIN){
+      target=ptTimestamp(p,6,30);
+      dayEl.textContent="Today";
+    }else{
+      const next=nextWeekday(p);
+      target=ptTimestamp(next,6,30);
+      dayEl.textContent=formatMarketDay(next);
+    }
+    action.textContent="Market opens in";
+    countdown.textContent=formatCountdown(target-now);
+    msg.textContent="🔴 Market is closed. Auto Trader will begin scanning automatically when the market opens.";
+  }
+}
+
+updateMarketClock();
+setInterval(updateMarketClock,1000);
+</script>
+</body>
+</html>
