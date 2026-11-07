@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Auto Trader V7</title>
+<title>Auto Trader — Paper Trading V2</title>
 <style>
 *{box-sizing:border-box}
 body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(135deg,#eef7f4 0%,#f6f8fb 48%,#edf2fa 100%);color:#17201d;min-height:100vh}
@@ -67,21 +67,6 @@ header{position:relative;padding-right:20px}
 .backend-note{font-size:12px;color:#66716e;margin-top:8px}
 .trade-status{display:inline-block;font-size:11px;padding:4px 7px;border-radius:7px;background:#eef3f1;margin-top:5px}
 
-
-/* Auto Trader V7 paper-mode night theme */
-body.paper-mode{background:#071018;color:#e7eef4}
-body.paper-mode header{background:linear-gradient(135deg,#02070b,#0b1b2b 55%,#101827)}
-body.paper-mode .card,body.paper-mode .panel-box,body.paper-mode .modal-box{background:#0d1822;color:#e7eef4;border-color:#20313f}
-body.paper-mode .detail{background:#13222e;color:#e7eef4}
-body.paper-mode .muted{color:#9eacb7}
-body.paper-mode .secondary{background:#1d2b37;color:#e7eef4}
-body.paper-mode .trade,body.paper-mode .history-row{border-color:#29404f}
-body.paper-mode .history-row:hover{background:#14232e}
-body.paper-mode .screen{background:#071018}
-.mode-badge{display:inline-block;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.6px}
-.mode-paper{background:#172b3b;color:#8fd3ff}
-.mode-live{background:#6d1717;color:#fff}
-.sell-btn{background:#b00020;color:#fff;margin-top:8px}
 </style>
 </head>
 <body>
@@ -216,10 +201,9 @@ body.paper-mode .screen{background:#071018}
 <script>
 
 const API_BASE = localStorage.getItem("autoTraderApi") || "https://auto-trader-paper-engine.onrender.com";
-let engineState={cash:100,equity:100,starting_cash:100,paper_bankroll:100,strategy_bankroll:100,active_bankroll:100,profit_reserve:0,broker_cash:0,broker_equity:0,open_trades:{},history:[],realized:0,daily_loss:0,engine:"connecting",mode:"paper",message:"Connecting to paper engine.",risk_per_trade_pct:.5,max_daily_loss_pct:2,max_open_positions:2,min_reward_risk:2,last_scan:null,last_setup:null};
+let engineState={cash:100,equity:100,starting_cash:100,paper_bankroll:100,broker_cash:0,broker_equity:0,open_trades:{},history:[],realized:0,daily_loss:0,engine:"connecting",message:"Connecting to paper engine.",risk_per_trade_pct:.5,max_daily_loss_pct:2,max_open_positions:2,min_reward_risk:2,last_scan:null,last_setup:null};
 let goal=Number(localStorage.getItem("autoTraderGoal")||1000);
 let apiTimer=null;
-let settingsRestored=false;
 
 function money(x){return "$"+Number(x||0).toFixed(2)}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
@@ -259,21 +243,6 @@ async function refreshEngine(){
   try{
     const [status,trades]=await Promise.all([api("/api/status"),api("/api/trades")]);
     engineState={...engineState,...status,open_trades:trades.open||{},history:normalizeHistory(trades.history||[])};
-    if(!settingsRestored){
-      settingsRestored=true;
-      const saved=localStorage.getItem("autoTraderSettings");
-      if(saved){
-        try{
-          const localSettings=JSON.parse(saved);
-          const same=Object.keys(localSettings).every(k=>Number(engineState[k])===Number(localSettings[k]));
-          if(!same){
-            await api("/api/settings",{method:"POST",body:JSON.stringify(localSettings)});
-            const fresh=await api("/api/status");
-            engineState={...engineState,...fresh};
-          }
-        }catch(e){ console.warn("Could not restore settings",e); }
-      }
-    }
     renderEngine();
     setConnection("Connected","ok");
   }catch(e){
@@ -285,12 +254,11 @@ async function refreshEngine(){
 
 function renderEngine(){
   const s=engineState;
-  document.body.classList.toggle("paper-mode", String(s.mode||"paper")==="paper");
   document.getElementById("cash").textContent=money(s.cash);
   const open=Object.values(s.open_trades||{});
   const invested=open.reduce((sum,t)=>sum+Number(t.current||t.entry_fill||t.entry_plan||0)*Number(t.qty||0),0);
   document.getElementById("invested").textContent=money(invested);
-  const pnl=Number(s.realized||0)+open.reduce((sum,t)=>sum+Number(t.unrealized_pnl||0),0);
+  const pnl=Number(s.equity||0)-Number(s.starting_cash||s.paper_bankroll||100);
   const pnlEl=document.getElementById("pnl");
   pnlEl.textContent=money(pnl);
   pnlEl.className="metric "+(pnl>=0?"good":"bad");
@@ -303,7 +271,7 @@ function renderEngine(){
     engine.textContent=String(s.engine||"unknown").replace(/_/g," ");
     engine.className=(s.engine==="error"?"engine-bad":s.engine==="waiting"||s.engine==="cooldown"?"engine-warn":"engine-ok");
   }
-  document.getElementById("engineBankroll").textContent=money(s.strategy_bankroll||s.paper_bankroll||s.starting_cash||100);
+  document.getElementById("engineBankroll").textContent=money(s.paper_bankroll||s.starting_cash||100);
   document.getElementById("brokerEquity").textContent=money(s.broker_equity||0);
   document.getElementById("lastScan").textContent=s.last_scan?new Date(s.last_scan).toLocaleTimeString():"—";
   document.getElementById("status").textContent=s.message||"Paper engine connected.";
@@ -322,7 +290,7 @@ function renderEngine(){
       <span class="${pl>=0?'good':'bad'}">${money(pl)}</span><br>
       Max risk: ${money(t.risk_cash)} · Target: ${money(t.target)} · R/R: ${Number(t.reward_risk||0).toFixed(1)}:1
       <br><button class="secondary" style="margin-top:8px" onclick="showOpenBySymbol('${esc(t.symbol)}')">View trade</button>
-      <button class="sell-btn" onclick="manualSell('${esc(t.symbol)}')">🔴 SELL NOW</button>
+      <button class="primary" style="margin-top:8px" onclick="sellNow('${esc(t.symbol)}')">SELL NOW</button>
     </div>`;
   }).join("") : '<div class="muted">No open trades.</div>';
 
@@ -347,15 +315,13 @@ async function manualScan(){
   }
 }
 
-async function manualSell(symbol){
-  if(!confirm(`Sell ${symbol} now? This will close the paper position at market price.`)) return;
+async function sellNow(symbol){
+  if(!confirm(`Sell ${symbol} now? This closes the paper position at the market.`)) return;
   try{
     const result=await api(`/api/trades/${encodeURIComponent(symbol)}/sell`,{method:"POST",body:"{}"});
-    document.getElementById("status").textContent=result.message||`${symbol} sell submitted.`;
-    setTimeout(refreshEngine,700);
-  }catch(e){
-    alert(e.message||"Sell request failed.");
-  }
+    document.getElementById("status").textContent=result.ok?`SELL NOW sent for ${symbol}.`:"Sell request sent.";
+    setTimeout(refreshEngine,800); setTimeout(refreshEngine,2500);
+  }catch(e){ alert(`SELL NOW failed: ${e.message}`); }
 }
 
 function showOpenBySymbol(symbol){
@@ -389,7 +355,6 @@ function openDetails(t,label){
   </div>
   <div class="trade"><b>Why did the app make this trade?</b><br>${esc(view.reason||"The setup passed the strategy rules.")}</div>
   ${view.exit_reason||view.closedReason?`<div class="trade"><b>Why did it sell?</b><br>${esc(view.exit_reason||view.closedReason)}</div>`:""}
-  ${label==="Current trade"?`<button class="sell-btn" style="width:100%" onclick="manualSell('${esc(view.ticker)}');closeDetails()">🔴 SELL NOW</button>`:""}
   `;
   document.getElementById("modal").classList.add("open");
   requestAnimationFrame(()=>drawChart(document.getElementById("tradeChart"),view));
@@ -424,14 +389,13 @@ function openScreen(type){
       <div class="detail"><span class="muted">Paper bankroll</span><br><b>${money(engineState.paper_bankroll||100)}</b></div>
       <div class="detail"><span class="muted">Broker paper equity</span><br><b>${money(engineState.broker_equity)}</b></div>
       <div class="detail"><span class="muted">Realized P/L</span><br><b class="${Number(engineState.realized)>=0?'good':'bad'}">${money(engineState.realized)}</b></div>
-      <div class="detail"><span class="muted">Daily loss</span><br><b class="bad">${money(engineState.daily_loss)}</b></div>
+      <div class="detail"><span class="muted">Daily loss</span><br><b class="bad">${money(engineState.daily_loss)}</b></div><div class="detail"><span class="muted">Profit reserve</span><br><b class="good">${money(engineState.profit_reserve||0)}</b></div>
     </div></div>
     <div class="card"><h3>Account status</h3><p>🤖 Auto Trader is connected to the <b>Alpaca paper engine</b>. Real money is not being traded.</p></div>`;
   } else if(type==="reload"){
     title.textContent="➕ Reload / Add Funds";
     body.innerHTML=`<div class="card"><h3>Paper bankroll</h3>
-      <p>Active strategy bankroll: <b>${money(engineState.active_bankroll??engineState.strategy_bankroll??100)}</b></p>
-      <p>Profit reserve: <b>${money(engineState.profit_reserve??0)}</b></p>
+      <p>The engine is intentionally capped at <b>${money(engineState.paper_bankroll||100)}</b>. Adding money in the app would not change the secure engine bankroll.</p>
       <p class="muted">When we build real funding, this screen will use an official broker funding flow instead of storing card details here.</p></div>`;
   } else if(type==="broker"){
     title.textContent="🔐 Market / Broker";
@@ -442,16 +406,9 @@ function openScreen(type){
       <div class="card"><h3>Live trading</h3><p>Live trading remains disabled while we test the strategy.</p></div>`;
   } else if(type==="settings"){
     title.textContent="⚙️ Settings";
-    body.innerHTML=`<div class="card"><h3>Trading Mode</h3>
-      <div class="detail-grid">
-        <div class="detail"><span class="muted">Current mode</span><br><b><span class="mode-badge mode-paper">🌙 PAPER MONEY</span></b></div>
-        <div class="detail"><span class="muted">Real money</span><br><button class="secondary" onclick="requestLiveMode()">Switch to Real Money</button></div>
-      </div>
-      <p class="muted">Paper mode is intentionally shown in night mode. Live trading will remain locked until the broker connection and live approval are completed.</p></div>
-      <div class="card"><h3>Strategy bankroll & risk settings</h3>
+    body.innerHTML=`<div class="card"><h3>Trading Mode</h3><div class="detail-grid"><div class="detail"><span class="muted">Current</span><br><b>🟣 PAPER MONEY</b></div><div class="detail"><span class="muted">Real Money</span><br><b class="bad">LOCKED</b></div></div><p class="muted">Paper mode is active. Real-money trading stays locked until the live broker connection and funding flow are implemented.</p></div><div class="card"><h3>Strategy bankroll & risk settings</h3>
       <label>Strategy bankroll ($)<input id="bankroll" type="number" min="1" step="1" value="${engineState.strategy_bankroll ?? engineState.paper_bankroll ?? 100}"></label><br>
-      <p class="muted">This is the active bankroll target for new trades. Changing it does not resize existing positions.</p>
-      <div class="detail-grid"><div class="detail"><span class="muted">Active bankroll</span><br><b>${money(engineState.active_bankroll??engineState.strategy_bankroll??100)}</b></div><div class="detail"><span class="muted">Profit reserve</span><br><b class="good">${money(engineState.profit_reserve??0)}</b></div></div>
+      <p class="muted">This is the amount V7 is allowed to use for new trades. Changing it does not resize existing positions.</p>
       <label>Risk per trade (%)<input id="riskPct" type="number" min="0.05" max="100" step="0.05" value="${engineState.risk_per_trade_pct}"></label><br>
       <label>Max daily loss (%)<input id="dailyPct" type="number" min="0.25" max="100" step="0.25" value="${engineState.max_daily_loss_pct}"></label><br>
       <label>Max open positions<input id="maxPos" type="number" min="1" max="20" step="1" value="${engineState.max_open_positions}"></label><br>
@@ -469,10 +426,6 @@ function openScreen(type){
   screen.classList.add("open");screen.setAttribute("aria-hidden","false");
 }
 function closeScreen(){const s=document.getElementById("screen");s.classList.remove("open");s.setAttribute("aria-hidden","true")}
-function requestLiveMode(){
-  alert("Real-money trading is locked for now. Paper trading remains active. We will enable this switch only after the live broker connection and safety checks are completed.");
-}
-
 async function saveSettings(){
   const payload={
     strategy_bankroll:Number(document.getElementById("bankroll").value),
@@ -481,12 +434,7 @@ async function saveSettings(){
     max_open_positions:Number(document.getElementById("maxPos").value),
     min_reward_risk:Number(document.getElementById("minRR").value)
   };
-  try{
-    localStorage.setItem("autoTraderSettings",JSON.stringify(payload));
-    await api("/api/settings",{method:"POST",body:JSON.stringify(payload)});
-    await refreshEngine();
-    closeScreen();
-  }
+  try{await api("/api/settings",{method:"POST",body:JSON.stringify(payload)});await refreshEngine();closeScreen();}
   catch(e){alert("Could not save engine settings: "+e.message)}
 }
 function saveGoal(){
