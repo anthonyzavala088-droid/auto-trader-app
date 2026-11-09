@@ -91,7 +91,7 @@ header{position:relative;padding-right:20px}
 <div class="card">
 <h2>Account</h2>
 <div class="grid">
-<div><div class="muted">Strategy money available</div><div id="cash" class="metric">$100.00</div></div>
+<div><div class="muted">Strategy cash available</div><div id="cash" class="metric">$100.00</div></div>
 <div><div class="muted">Currently invested</div><div id="invested" class="metric">$0.00</div></div>
 <div><div class="muted">Profit / Loss</div><div id="pnl" class="metric">$0.00</div></div>
 <div><div class="muted">Goal</div><div id="goal" class="metric">$1,000.00</div></div>
@@ -142,8 +142,7 @@ header{position:relative;padding-right:20px}
 <div class="detail-grid">
   <div class="detail"><span class="muted">Engine</span><br><b id="engineState">Connecting…</b></div>
   <div class="detail"><span class="muted">Paper bankroll</span><br><b id="engineBankroll">$100.00</b></div>
-  <div class="detail"><span class="muted">Alpaca paper equity</span><br><b id="brokerEquity">$0.00</b></div>
-  <div class="detail"><span class="muted">Alpaca paper cash</span><br><b id="brokerCash">$0.00</b></div>
+  <div class="detail"><span class="muted">Broker account</span><br><b id="brokerEquity">$0.00</b></div>
   <div class="detail"><span class="muted">Last scan</span><br><b id="lastScan">—</b></div>
 </div>
 </div>
@@ -217,7 +216,6 @@ async function api(path,options={}){
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.detail||data.message||`HTTP ${res.status}`);
-  if(data && data.ok===false) throw new Error(data.message||"Request failed.");
   return data;
 }
 
@@ -244,11 +242,7 @@ function normalizeHistory(h){
 async function refreshEngine(){
   try{
     const [status,trades]=await Promise.all([api("/api/status"),api("/api/trades")]);
-    const rawOpen=trades.open||[];
-    const normalizedOpen=Array.isArray(rawOpen)
-      ? Object.fromEntries(rawOpen.filter(t=>t&&t.symbol).map(t=>[t.symbol,t]))
-      : rawOpen;
-    engineState={...engineState,...status,open_trades:normalizedOpen,history:normalizeHistory(trades.history||[])};
+    engineState={...engineState,...status,open_trades:trades.open||{},history:normalizeHistory(trades.history||[])};
     renderEngine();
     setConnection("Connected","ok");
   }catch(e){
@@ -264,7 +258,8 @@ function renderEngine(){
   const open=Object.values(s.open_trades||{});
   const invested=open.reduce((sum,t)=>sum+Number(t.current||t.entry_fill||t.entry_plan||0)*Number(t.qty||0),0);
   document.getElementById("invested").textContent=money(invested);
-  const pnl=Number(s.equity||0)-Number(s.starting_cash||s.paper_bankroll||100);
+  const unrealized=open.reduce((sum,t)=>sum+Number(t.unrealized_pnl||((Number(t.current||t.entry_fill||t.entry_plan||0)-Number(t.entry_fill||t.entry_plan||0))*Number(t.qty||0))),0);
+  const pnl=Number(s.realized||0)+unrealized;
   const pnlEl=document.getElementById("pnl");
   pnlEl.textContent=money(pnl);
   pnlEl.className="metric "+(pnl>=0?"good":"bad");
@@ -279,14 +274,11 @@ function renderEngine(){
   }
   document.getElementById("engineBankroll").textContent=money(s.paper_bankroll||s.starting_cash||100);
   document.getElementById("brokerEquity").textContent=money(s.broker_equity||0);
-  if(document.getElementById("brokerCash")) document.getElementById("brokerCash").textContent=money(s.broker_cash||0);
   document.getElementById("lastScan").textContent=s.last_scan?new Date(s.last_scan).toLocaleTimeString():"—";
   document.getElementById("status").textContent=s.message||"Paper engine connected.";
-  document.getElementById("log").innerHTML=
-    `<b>Open positions:</b> ${open.length} / ${Number(s.max_open_positions||0)}<br>` +
-    (s.last_setup
-      ? `<b>Latest setup:</b> ${esc(s.last_setup.symbol||"")} — ${esc(s.last_setup.reason||"Setup found by the strategy.")}`
-      : `<b>Engine:</b> ${esc(s.message||"Waiting for the next scan.")}`);
+  document.getElementById("log").innerHTML=s.last_setup
+    ? `<b>Latest setup:</b> ${esc(s.last_setup.symbol||"")} — ${esc(s.last_setup.reason||"Setup found by the strategy.")}<br><span class="muted">Scanner universe: ${Number(s.symbol_count||s.symbols?.length||0)} liquid stocks/ETFs.</span>`
+    : `<b>Engine:</b> ${esc(s.message||"Waiting for the next scan.")}<br><span class="muted">Scanner universe: ${Number(s.symbol_count||s.symbols?.length||0)} liquid stocks/ETFs.</span>`;
 
   const box=document.getElementById("trades");
   box.innerHTML=open.length ? open.map((t,i)=>{
@@ -300,7 +292,7 @@ function renderEngine(){
       Max risk: ${money(t.risk_cash)} · Target: ${money(t.target)} · R/R: ${Number(t.reward_risk||0).toFixed(1)}:1
       <br>
       <button class="secondary" style="margin-top:8px" onclick="showOpenBySymbol('${esc(t.symbol)}')">View trade</button>
-      <button class="primary" style="margin-top:8px;background:#b00020" onclick="sellNow('${esc(t.symbol)}')">SELL NOW</button>
+      <button class="primary" style="margin-top:8px;margin-left:6px;background:#b00020" onclick="manualSell('${esc(t.symbol)}')">SELL NOW</button>
     </div>`;
   }).join("") : '<div class="muted">No open trades.</div>';
 
@@ -325,27 +317,6 @@ async function manualScan(){
   }
 }
 
-async function sellNow(symbol){
-  const ok=confirm(`Sell ${symbol} now? This will close the paper position at market price.`);
-  if(!ok) return;
-
-  try{
-    document.getElementById("status").textContent=`Selling ${symbol}…`;
-    const result=await api("/api/sell",{
-      method:"POST",
-      body:JSON.stringify({symbol})
-    });
-    if(!result.ok) throw new Error(result.message||"Sell failed.");
-    const pnl=Number(result.trade?.pnl||0);
-    document.getElementById("status").textContent=
-      `${symbol} sold. Realized P/L: ${pnl>=0?"+":""}${money(pnl)}.`;
-    await refreshEngine();
-  }catch(e){
-    alert(`SELL NOW failed: ${e.message}`);
-    document.getElementById("status").textContent=e.message;
-  }
-}
-
 function showOpenBySymbol(symbol){
   const t=engineState.open_trades?.[symbol];
   if(t) openDetails(t,"Current trade");
@@ -359,45 +330,136 @@ function showHistory(i){
   const t=engineState.history[i];
   if(t) openDetails(t,"Completed trade");
 }
-function openDetails(t,label){
+async function openDetails(t,label){
   const entry=Number(t.entry_fill||t.entry_plan||t.entry||0);
-  const current=t.exit!=null?Number(t.exit):Number(t.current||entry);
-  const prices=[entry,current];
-  const view={...t,ticker:t.symbol||t.ticker||"—",name:t.name||t.symbol||t.ticker||"—",entry,exit:t.exit!=null?Number(t.exit):null,qty:Number(t.qty||0),pnl:Number(t.pnl||t.unrealized_pnl||0),prices};
+  const view={
+    ...t,
+    ticker:t.symbol||t.ticker||"—",
+    name:t.name||t.symbol||t.ticker||"—",
+    entry,
+    exit:t.exit!=null?Number(t.exit):null,
+    qty:Number(t.qty||0),
+    pnl:Number(t.pnl||t.unrealized_pnl||0)
+  };
   document.getElementById("detailTitle").textContent=`${view.ticker} — ${view.name}`;
   document.getElementById("detailBody").innerHTML=`
-  <div class="chart-wrap"><canvas id="tradeChart"></canvas></div>
-  <div class="detail-grid">
-    <div class="detail"><span class="muted">Status</span><br><b>${label}</b></div>
-    <div class="detail"><span class="muted">Bought</span><br><b>${money(view.entry)}</b></div>
-    <div class="detail"><span class="muted">Sold</span><br><b>${view.exit==null?"Not sold":money(view.exit)}</b></div>
-    <div class="detail"><span class="muted">Shares</span><br><b>${view.qty.toFixed(4)}</b></div>
-    <div class="detail"><span class="muted">P/L</span><br><b class="${view.pnl>=0?'good':'bad'}">${label==="Current trade"?"Open":money(view.pnl)}</b></div>
-    <div class="detail"><span class="muted">Opened</span><br><b>${esc(view.opened||view.openedAt||"")}</b></div>
-  </div>
-  <div class="trade"><b>Why did the app make this trade?</b><br>${esc(view.reason||"The setup passed the strategy rules.")}</div>
-  ${view.exit_reason||view.closedReason?`<div class="trade"><b>Why did it sell?</b><br>${esc(view.exit_reason||view.closedReason)}</div>`:""}
+    <div class="chart-wrap"><canvas id="tradeChart"></canvas></div>
+    <div id="chartStatus" class="muted">Loading price history…</div>
+    <div class="detail-grid">
+      <div class="detail"><span class="muted">Status</span><br><b>${label}</b></div>
+      <div class="detail"><span class="muted">Bought</span><br><b>${money(view.entry)}</b></div>
+      <div class="detail"><span class="muted">Sold</span><br><b>${view.exit==null?"Not sold":money(view.exit)}</b></div>
+      <div class="detail"><span class="muted">Shares</span><br><b>${view.qty.toFixed(4)}</b></div>
+      <div class="detail"><span class="muted">P/L</span><br><b class="${view.pnl>=0?'good':'bad'}">${label==="Current trade"?"Open":money(view.pnl)}</b></div>
+      <div class="detail"><span class="muted">Opened</span><br><b>${esc(view.opened||view.openedAt||"")}</b></div>
+    </div>
+    <div class="trade"><b>Why did the app make this trade?</b><br>${esc(view.reason||"The setup passed the strategy rules.")}</div>
+    ${view.exit_reason||view.closedReason?`<div class="trade"><b>Why did it sell?</b><br>${esc(view.exit_reason||view.closedReason)}</div>`:""}
   `;
   document.getElementById("modal").classList.add("open");
-  requestAnimationFrame(()=>drawChart(document.getElementById("tradeChart"),view));
+  try{
+    const qs=[];
+    if(view.opened) qs.push("opened="+encodeURIComponent(view.opened));
+    if(view.closed) qs.push("closed="+encodeURIComponent(view.closed));
+    const result=await api(`/api/trades/${encodeURIComponent(view.ticker)}/chart${qs.length?"?"+qs.join("&"):""}`);
+    const bars=(result.bars||[]).map(b=>({ts:b.ts,price:Number(b.close)})).filter(b=>Number.isFinite(b.price));
+    view.chartBars=bars;
+    const status=document.getElementById("chartStatus");
+    if(status) status.textContent=bars.length ? `5-minute price history • ${bars.length} price points` : "Price history unavailable.";
+    requestAnimationFrame(()=>drawChart(document.getElementById("tradeChart"),view));
+  }catch(e){
+    const status=document.getElementById("chartStatus");
+    if(status) status.textContent="Could not load price history: "+e.message;
+    requestAnimationFrame(()=>drawChart(document.getElementById("tradeChart"),view));
+  }
 }
 function closeDetails(){document.getElementById("modal").classList.remove("open")}
 function closeModal(e){if(e.target.id==="modal")closeDetails()}
 
 function drawChart(canvas,t){
-  let ctx=canvas.getContext("2d"), w=canvas.width=canvas.clientWidth*2, h=canvas.height=600;
-  ctx.clearRect(0,0,w,h);ctx.fillStyle="#0c2a42";ctx.fillRect(0,0,w,h);
-  let prices=t.prices||[t.entry,t.exit??t.current??t.entry], min=Math.min(...prices),max=Math.max(...prices), pad=(max-min)*.12||1;
-  min-=pad;max+=pad;let xStep=prices.length>1?w/(prices.length-1):w;
-  function y(v){return h-30-(v-min)/(max-min)*(h-60)}
-  ctx.strokeStyle="rgba(255,255,255,.10)";ctx.lineWidth=2;
-  for(let i=1;i<7;i++){let yy=i*h/7;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}
-  ctx.strokeStyle="#83d63d";ctx.lineWidth=5;ctx.beginPath();
-  prices.forEach((p,i)=>{let xx=i*xStep,yy=y(p);if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy)});ctx.stroke();
-  ctx.strokeStyle="#fff";ctx.setLineDash([10,8]);ctx.lineWidth=3;
-  ctx.beginPath();ctx.moveTo(0,y(t.entry));ctx.lineTo(w,y(t.entry));ctx.stroke();ctx.setLineDash([]);
-  ctx.font="28px Arial";ctx.fillStyle="#fff";ctx.fillText("Entry",20,Math.max(35,y(t.entry)-10));
-  if(t.exit!=null){ctx.fillStyle="#ffb84d";ctx.fillText("Exit",w-100,Math.max(35,y(t.exit)-10));}
+  if(!canvas) return;
+  const ctx=canvas.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const cssW=Math.max(280,canvas.clientWidth||280), cssH=320;
+  canvas.width=Math.round(cssW*dpr);
+  canvas.height=Math.round(cssH*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,cssW,cssH);
+  ctx.fillStyle="#0c2a42";
+  ctx.fillRect(0,0,cssW,cssH);
+
+  let series=(t.chartBars||[]).map(x=>Number(x.price)).filter(Number.isFinite);
+  if(series.length<2){
+    series=[Number(t.entry||0)];
+    if(t.current!=null) series.push(Number(t.current));
+    if(t.exit!=null) series.push(Number(t.exit));
+  }
+  if(!series.length) return;
+
+  let min=Math.min(...series,Number(t.entry||series[0]));
+  let max=Math.max(...series,Number(t.entry||series[0]));
+  if(t.exit!=null){min=Math.min(min,Number(t.exit));max=Math.max(max,Number(t.exit));}
+  const pad=(max-min)*0.12 || Math.max(0.5,Math.abs(max)*0.003);
+  min-=pad;max+=pad;
+
+  const left=42,right=14,top=18,bottom=28;
+  const pw=cssW-left-right, ph=cssH-top-bottom;
+  const y=v=>top+(max-v)/(max-min)*ph;
+  const x=i=>left+(series.length<=1?0:(i/(series.length-1))*pw);
+
+  ctx.strokeStyle="rgba(255,255,255,.10)";
+  ctx.lineWidth=1;
+  ctx.font="11px Arial";
+  ctx.fillStyle="rgba(255,255,255,.75)";
+  for(let i=0;i<5;i++){
+    const yy=top+(i/4)*ph;
+    ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(cssW-right,yy);ctx.stroke();
+    const val=max-(i/4)*(max-min);
+    ctx.fillText("$"+val.toFixed(2),4,yy+4);
+  }
+
+  ctx.strokeStyle="#83d63d";
+  ctx.lineWidth=2.5;
+  ctx.beginPath();
+  series.forEach((v,i)=>{const xx=x(i),yy=y(v);if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy)});
+  ctx.stroke();
+
+  ctx.strokeStyle="rgba(255,255,255,.85)";
+  ctx.setLineDash([7,6]);
+  ctx.lineWidth=1.5;
+  const entryY=y(Number(t.entry||series[0]));
+  ctx.beginPath();ctx.moveTo(left,entryY);ctx.lineTo(cssW-right,entryY);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle="#fff";
+  ctx.fillText("Entry",left+4,Math.max(12,entryY-6));
+
+  if(t.exit!=null){
+    const exitY=y(Number(t.exit));
+    ctx.strokeStyle="#ffb84d";
+    ctx.setLineDash([7,6]);
+    ctx.beginPath();ctx.moveTo(left,exitY);ctx.lineTo(cssW-right,exitY);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle="#ffb84d";
+    ctx.fillText("Exit",Math.max(left+4,cssW-right-34),Math.max(12,exitY-6));
+  }
+
+  if(t.current!=null && t.exit==null){
+    const nowY=y(Number(t.current));
+    ctx.fillStyle="#7dd3fc";
+    ctx.beginPath();ctx.arc(cssW-right,nowY,4,0,Math.PI*2);ctx.fill();
+    ctx.fillText("Now",Math.max(left+4,cssW-right-30),Math.max(12,nowY-8));
+  }
+}
+
+async function manualSell(symbol){
+  if(!confirm(`Sell ${symbol} now? This will close the paper position at the current market price.`)) return;
+  try{
+    const result=await api(`/api/sell/${encodeURIComponent(symbol)}`,{method:"POST",body:"{}"});
+    alert(`${symbol} sold at ${money(result.exit_price)}. P/L: ${money(result.pnl)}`);
+    await refreshEngine();
+  }catch(e){
+    alert(`SELL NOW failed: ${e.message}`);
+  }
 }
 
 function openScreen(type){
