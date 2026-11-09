@@ -14,7 +14,7 @@ header h1{letter-spacing:.2px;margin:0 0 4px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .metric{font-size:24px;font-weight:700}.muted{color:#666;font-size:13px}
 button{border:0;border-radius:10px;padding:11px 15px;font-weight:700;cursor:pointer}
-.primary{background:#111;color:#fff}.secondary{background:#e9eaed}
+.primary{background:#111;color:#fff}.secondary{background:#e9eaed}.danger{background:#b00020;color:#fff}
 input{width:100%;padding:10px;border:1px solid #ccc;border-radius:9px;margin-top:6px}
 .trade,.history-row{border:1px solid #ddd;border-radius:10px;padding:12px;margin-top:10px}
 .history-row{cursor:pointer;display:flex;justify-content:space-between;align-items:center}
@@ -133,7 +133,7 @@ header{position:relative;padding-right:20px}
 <div class="card">
 <h2>🤖 Auto Trader</h2>
 <p id="status">Waiting for the next market scan.</p>
-<div id="scannerLabel" class="muted">Scanning 40+ liquid stocks/ETFs...</div>
+<div id="scannerLabel" class="muted">Loading scanner universe...</div>
 <button class="primary" onclick="manualScan()">🔎 Test Scan Now</button>
 <button id="pauseBtn" class="secondary" onclick="togglePause()">⏸️ Pause Auto Trader</button>
 <button class="secondary" onclick="refreshEngine()">↻ Refresh</button>
@@ -203,7 +203,7 @@ header{position:relative;padding-right:20px}
 <script>
 
 const API_BASE = localStorage.getItem("autoTraderApi") || "https://auto-trader-paper-engine.onrender.com";
-let engineState={cash:100,equity:100,starting_cash:100,paper_bankroll:100,broker_cash:0,broker_equity:0,open_trades:{},history:[],realized:0,daily_loss:0,engine:"connecting",message:"Connecting to paper engine.",risk_per_trade_pct:.5,max_daily_loss_pct:2,max_open_positions:2,min_reward_risk:2,last_scan:null,last_setup:null,paused:false,symbols:[]};
+let engineState={cash:100,equity:100,starting_cash:100,paper_bankroll:100,broker_cash:0,broker_equity:0,open_trades:{},history:[],realized:0,daily_loss:0,engine:"connecting",message:"Connecting to paper engine.",risk_per_trade_pct:.5,max_daily_loss_pct:10,max_open_positions:2,min_reward_risk:2,last_scan:null,last_setup:null,paused:false,symbols:[]};
 let goal=Number(localStorage.getItem("autoTraderGoal")||1000);
 let apiTimer=null;
 
@@ -299,7 +299,10 @@ function renderEngine(){
       Shares: ${Number(t.qty||0).toFixed(4)} · P/L:
       <span class="${pl>=0?'good':'bad'}">${money(pl)}</span><br>
       Max risk: ${money(t.risk_cash)} · Target: ${money(t.target)} · R/R: ${Number(t.reward_risk||0).toFixed(1)}:1
-      <br><button class="secondary" style="margin-top:8px" onclick="showOpenBySymbol('${esc(t.symbol)}')">View trade</button>
+      <br><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+<button class="secondary" onclick="showOpenBySymbol('${esc(t.symbol)}')">View trade</button>
+<button class="danger" onclick="sellNow('${esc(t.symbol)}')">SELL NOW</button>
+</div>
     </div>`;
   }).join("") : '<div class="muted">No open trades.</div>';
 
@@ -338,9 +341,25 @@ async function togglePause(){
   }
 }
 
-function showOpenBySymbol(symbol){
+async function showOpenBySymbol(symbol){
   const t=engineState.open_trades?.[symbol];
-  if(t) openDetails(t,"Current trade");
+  if(t){ openDetails(t,"Current trade"); return; }
+  try{
+    await refreshEngine();
+    const again=engineState.open_trades?.[symbol];
+    if(again) openDetails(again,"Current trade");
+    else alert(`Could not find the open ${symbol} trade in the engine.`);
+  }catch(e){ alert("Could not load this trade: "+e.message); }
+}
+
+async function sellNow(symbol){
+  if(!confirm(`Sell ${symbol} now? This will close the paper position at market price.`)) return;
+  try{
+    const r=await api(`/api/sell/${encodeURIComponent(symbol)}`,{method:"POST",body:"{}"});
+    if(r.status==="filled") alert(`${symbol} sold. P/L: ${money(r.pnl)}`);
+    else alert(`${symbol} SELL NOW submitted. The engine is waiting for the fill.`);
+    await refreshEngine();
+  }catch(e){ alert("SELL NOW failed: "+e.message); }
 }
 
 function showOpen(i){
@@ -376,7 +395,10 @@ function openDetails(t,label){
       view.prices=(chart.bars||[]).map(b=>Number(b.close)).filter(Number.isFinite);
       if(view.prices.length<2) view.prices=[entry,current];
       if(view.exit!=null) view.prices.push(view.exit);
-    }catch(e){}
+      else if(view.prices.length && current) view.prices.push(current);
+    }catch(e){
+      view.prices=[entry,current];
+    }
     drawChart(document.getElementById("tradeChart"),view);
   });
 }
@@ -384,19 +406,33 @@ function closeDetails(){document.getElementById("modal").classList.remove("open"
 function closeModal(e){if(e.target.id==="modal")closeDetails()}
 
 function drawChart(canvas,t){
-  let ctx=canvas.getContext("2d"), w=canvas.width=canvas.clientWidth*2, h=canvas.height=600;
+  if(!canvas) return;
+  const ctx=canvas.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const cssW=Math.max(320,canvas.clientWidth||320), cssH=300;
+  canvas.width=cssW*dpr; canvas.height=cssH*dpr; canvas.style.height=cssH+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w=cssW,h=cssH;
   ctx.clearRect(0,0,w,h);ctx.fillStyle="#0c2a42";ctx.fillRect(0,0,w,h);
-  let prices=t.prices||[t.entry,t.exit??t.current??t.entry], min=Math.min(...prices),max=Math.max(...prices), pad=(max-min)*.12||1;
-  min-=pad;max+=pad;let xStep=prices.length>1?w/(prices.length-1):w;
-  function y(v){return h-30-(v-min)/(max-min)*(h-60)}
-  ctx.strokeStyle="rgba(255,255,255,.10)";ctx.lineWidth=2;
-  for(let i=1;i<7;i++){let yy=i*h/7;ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke()}
-  ctx.strokeStyle="#83d63d";ctx.lineWidth=5;ctx.beginPath();
-  prices.forEach((p,i)=>{let xx=i*xStep,yy=y(p);if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy)});ctx.stroke();
-  ctx.strokeStyle="#fff";ctx.setLineDash([10,8]);ctx.lineWidth=3;
-  ctx.beginPath();ctx.moveTo(0,y(t.entry));ctx.lineTo(w,y(t.entry));ctx.stroke();ctx.setLineDash([]);
-  ctx.font="28px Arial";ctx.fillStyle="#fff";ctx.fillText("Entry",20,Math.max(35,y(t.entry)-10));
-  if(t.exit!=null){ctx.fillStyle="#ffb84d";ctx.fillText("Exit",w-100,Math.max(35,y(t.exit)-10));}
+  const prices=(t.prices||[]).map(Number).filter(Number.isFinite);
+  if(prices.length<2){ctx.fillStyle="#fff";ctx.font="16px Arial";ctx.fillText("Price history unavailable",20,35);return;}
+  let min=Math.min(...prices),max=Math.max(...prices),range=max-min||1,pad=range*.10;min-=pad;max+=pad;
+  const left=12,right=12,top=18,bottom=24,plotW=w-left-right,plotH=h-top-bottom;
+  const y=v=>top+(max-v)/(max-min)*plotH;
+  const x=i=>left+(i/(prices.length-1))*plotW;
+  ctx.strokeStyle="rgba(255,255,255,.10)";ctx.lineWidth=1;
+  for(let i=1;i<6;i++){const yy=top+i*plotH/6;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right,yy);ctx.stroke();}
+  ctx.strokeStyle="#83d63d";ctx.lineWidth=2.5;ctx.beginPath();
+  prices.forEach((p,i)=>{const xx=x(i),yy=y(p);if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy)});ctx.stroke();
+  const drawLine=(value,label,dash)=>{
+    if(!Number.isFinite(value)||value<=0) return;
+    const yy=y(value);ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.setLineDash(dash?[7,6]:[]);ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right,yy);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle="#fff";ctx.font="13px Arial";ctx.fillText(label+" $"+value.toFixed(2),left+5,Math.max(15,yy-6));
+  };
+  drawLine(Number(t.entry),"Entry",true);
+  if(t.exit!=null) drawLine(Number(t.exit),"Exit",false);
+  const now=t.exit==null?(prices[prices.length-1]):null;
+  if(now!=null){const yy=y(now);ctx.fillStyle="#5bc0ff";ctx.beginPath();ctx.arc(w-right,yy,4,0,Math.PI*2);ctx.fill();ctx.font="13px Arial";ctx.fillText("Now $"+now.toFixed(2),Math.max(left,w-110),Math.max(15,yy-8));}
 }
 
 function openScreen(type){
